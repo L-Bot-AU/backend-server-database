@@ -1,24 +1,20 @@
-from flask import Flask
-from flask_sqlalchemy import SQLAlchemy
-from dotenv import load_dotenv
+from sqlalchemy import Column, Integer, String, create_engine
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import validates, sessionmaker
 from getData import getData
 from threading import Timer
+import websockets
 import datetime
+import asyncio
+import socket
 import json
 import os
 
 
-load_dotenv()
-
-
-app = Flask(__name__)
-app.config.update(
-    SECRET_KEY=os.environ.get("SECRET_KEY"),
-    SECURITY_PASSWORD=os.environ.get("SECURITY_PASSWORD"),
-    SQLALCHEMY_TRACK_MODIFICATIONS=True,
-    SQLALCHEMY_DATABASE_URI="sqlite:///site.db"
-)
-db = SQLAlchemy(app)
+engine = create_engine("sqlite:///library_usage.db", echo="debug")
+Base = declarative_base()
+Session = sessionmaker(bind=engine)
+session = Session()
 
 
 days = ["monday", "tuesday", "wednesday", "thursday", "friday"]
@@ -26,6 +22,18 @@ times = ["Morning", "Break 1", "Break 2"]
 # weeks = ["A", "B", "C"]
 cycledays = days
 # cycledays = [day+week for day in days for week in weeks]
+
+COUNTER_PORT = 9482
+
+
+async def client_help(websocket, path):
+    options = {
+        "/snrCount": lambda :str(count("snr")),
+        "/jnrCount": lambda :str(count("jnr")),
+        "/predictions": get_predictions
+    }
+
+    await websocket.send(options.get(path, lambda :"Could not recognise action")())
 
 
 def daily_update_loop():
@@ -35,74 +43,63 @@ def daily_update_loop():
 
     for day in days:
         predData = getData(term, week, days.index(day) + 1)
-        for data in Data.query.filter_by(day=day).all():
+        for data in session.query(Data).filter_by(day=day).all():
             data.expected = (predData[2*times.index(data.time)] + predData[2*times.index(data.time)+1]) // 2
 
-    db.session.commit()
+    session.commit()
     current = datetime.datetime.now()
     new = current.replace(day=current.day, hour=1, minute=0, second=0, microsecond=0) + datetime.timedelta(days=1)
     secs = (new - current).total_seconds()
     Timer(secs, daily_update_loop).start()
 
 
-class Data(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    day = db.Column(db.String(10), nullable=False)
-    time = db.Column(db.String(10), nullable=False)
-    expected = db.Column(db.Integer, default=0)
+class Data(Base):
+    __tablename__ = "data"
+
+    id = Column(Integer, primary_key=True)
+    day = Column(String(10), nullable=False)
+    time = Column(String(10), nullable=False)
+    expected = Column(Integer, default=0)
 
 
-    @db.validates("expected")
+    @validates("expected")
     def validate_expected(self, key, count):
         assert count >= 0
         return count
 
 
-class Date(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    date = db.Column(db.DateTime, default=datetime.datetime.now, nullable=False)
-    day = db.Column(db.String(10), default=lambda :days[date.weekday()], nullable=False)
-    value = db.Column(db.Integer, default=0)
+class Count(Base):
+    __tablename__ = "count"
 
-    
-    @db.validates("value")
-    def valid_value(self, key, count):
-        assert count >= 0
-        return count
+    id = Column(Integer, primary_key=True)
+    snrvalue = Column(Integer, default=0)
+    jnrvalue = Column(Integer, default=0)
 
 
-class Count(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    snrvalue = db.Column(db.Integer, default=0)
-    jnrvalue = db.Column(db.Integer, default=0)
-
-
-    @db.validates("snrvalue")
+    @validates("snrvalue")
     def valid_snrvalue(self, key, count):
         assert count >= 0
         return count
 
 
-    @db.validates("jnrvalue")
+    @validates("jnrvalue")
     def valid_jnrvalue(self, key, count):
         assert count >= 0
         return count
 
 
-@app.route("/<lib>Count")
 def count(lib):
     if lib == "snr":
-        return str(Count.query.first().snrvalue)
+        return session.query(Count).first().snrvalue
     else:
-        return str(Count.query.first().jnrvalue)
+        return session.query(Count).first().jnrvalue
 
 
-@app.route("/predictions")
 def get_predictions():
     predictions = [] # can be dictionary if required
     for day in days:
         day_predictions = {}
-        for data in Data.query.filter_by(day=day).all():
+        for data in session.query(Data).filter_by(day=day).all():
             day_predictions[data.time] = data.expected
         predictions.append(day_predictions)
     return json.dumps(predictions)
@@ -139,19 +136,33 @@ def money(lib):
     return "WE ARE NOT CRIMINAKLS!!!!!"
 """
 #"""
-db.create_all()
+Base.metadata.drop_all(engine)
+Base.metadata.create_all(engine)
 
 for day in days:
     for time in times:
         d = Data(day=day, time=time)
-        db.session.add(d)
+        session.add(d)
 
-db.session.add(Count())
+session.add(Count())
 
-db.session.commit()
+session.commit()
 
 Timer(0, daily_update_loop).start()
-#"""    
+#"""
 
-if __name__ == "__main__":
-    app.run()
+start_server = websockets.serve(client_help, "0.0.0.0", 2910)
+asyncio.get_event_loop().run_until_complete(start_server)
+asyncio.get_event_loop().run_forever()
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+sock.bind(("0.0.0.0", COUNTER_PORT))
+sock.listen(10)
+
+while True:
+    client, address = sock.accept()
+    
+    print(f"Connection from {addr}")
+
+    client.send("test")
+    client.close()
