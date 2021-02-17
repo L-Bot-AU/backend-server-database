@@ -7,17 +7,17 @@ class ConnServer:
     def __init__(self, SERVER_IP="127.0.0.1", PORT=4485):
         self.SERVER_SOCK = (SERVER_IP, PORT)
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.sock.ioctl(socket.SIO_KEEPALIVE_VALS, (1, 32400000)
         self.sock.connect(self.SERVER_SOCK)
-        aesenc = AES.new(b"automate_egggggg", AES.MODE_GCM)
+        self.aesdec = AES.new(b"automate_egggggg", AES.MODE_ECB)
         message = self.sock.recv(1024)
-        self.sock.send(aesenc.encrypt(message))
+        self.sock.send(self.aesdec.decrypt(message))
 
     def send(self, msg):
-        msg = (msg + "\n").encode("latin-1")
-        self.sock.send(msg)
+        self.sock.send(msg.encode("latin-1"))
 
     def add(self, n):
-        self.send("+"+str(n))
+        self.send(str(n))
 
     def sub(self, n):
         self.send("-"+str(n))
@@ -31,7 +31,7 @@ class StubConnServer:
         print(f"Sending: '{msg}'")
 
     def add(self, n):
-        self.send("+"+str(n))
+        self.send(str(n))
 
     def sub(self, n):
         self.send("-"+str(n))
