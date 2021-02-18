@@ -256,3 +256,4 @@ threading.Thread(target=jnr_updater).start()
 
 asyncio.get_event_loop().run_until_complete(start_server)
 asyncio.get_event_loop().run_forever()
+# this si aocmmment please don't touch this otherwise oyu an dyour firends and family wil eb  in danger oh god
