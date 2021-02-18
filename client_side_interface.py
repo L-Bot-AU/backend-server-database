@@ -1,13 +1,14 @@
 from sqlalchemy import Column, Integer, String, create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import validates, sessionmaker
-from getData import getData
-from threading import Timer
 from Crypto.Cipher import AES
-import random
+from getData import getData
 import websockets
+import threading
 import datetime
 import asyncio
+import random
+import base64
 import socket
 import json
 import os
@@ -15,13 +16,10 @@ import os
 
 engine = create_engine("sqlite:///library_usage.db", echo=False)
 Base = declarative_base()
-Session = sessionmaker(bind=engine)
-session = Session()
-
 
 key = b'automate_egggggg'
-aesenc = AES.new(key, AES.MODE_CBC)
-aesdec = AES.new(key, AES.MODE_CBC)
+aesenc = AES.new(key, AES.MODE_ECB)
+aesdec = AES.new(key, AES.MODE_ECB)
 
 days = ["monday", "tuesday", "wednesday", "thursday", "friday"]
 times = ["Morning", "Break 1", "Break 2"]
@@ -35,70 +33,79 @@ SNRCOUNTER_PORT = 11498
 
 
 async def client_help(websocket, path):
-    print("BLAI!!!!!!!!!!!!!!!!!!", websocket, path)
+    print(f"Connection received from {websocket} at {path}")
     options = {
         "/snrCount": lambda :str(count("snr")),
         "/jnrCount": lambda :str(count("jnr")),
         "/jnrPredictions": get_predictions("jnr"),
         "/snrPredictions": get_predictions("snr")
     }
-    print(options.get(path, lambda :"Could not recognise action")())
     await websocket.send(options.get(path, lambda :"Could not recognise action")())
 
 
-async def jnr_updater():
-    print("Starting jnr_updater")    
+def jnr_updater():
+    Session = sessionmaker(bind=engine)
+    session = Session()
+    print("Starting jnr_updater")
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.bind(("0.0.0.0", JNRCOUNTER_PORT))
     sock.listen(10)
-
     while True:
         client, address = sock.accept()
-        sock.settimeout(5.0)
+        sock.settimeout(6)
 
-        print(f"Connection from {addr}:{JNRCOUNTER_PORT}")
+        print(f"Connection from {address[0]}:{address[1]}")
 
         plaintext = bytes([random.randint(0, 0xff) for _ in range(16)])
-        client.send(aesenc.encrypt(plaintext) + b"\n")
+        client.send(aesenc.encrypt(plaintext))
         try:
-            if client.recv(1024) == plaintext:
-                sock.settimeout(None)
+            msg = client.recv(16)
+            if msg == plaintext:
+                print("Verification succeeded")
                 while True:
-                    inc = int(sock.recv(1024))
+                    sock.settimeout(None)
+                    inc = eval(client.recv(1024))
                     session.query(Count).first().jnrvalue += inc
                     session.commit()
         except Exception as e:
-            print(e)
+            print(e, "(recieved from jnr port)")
+
         client.close()
 
 
-async def snr_updater():
+def snr_updater():
+    Session = sessionmaker(bind=engine)
+    session = Session()
     print("Starting snr_updater")
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.bind(("0.0.0.0", SNRCOUNTER_PORT))
     sock.listen(10)
-
     while True:
         client, address = sock.accept()
-        sock.settimeout(5.0)
-        
-        print(f"Connection from {addr}:{SNRCOUNTER_PORT}")
+        sock.settimeout(6)
+
+        print(f"Connection from {address[0]}:{address[1]}")
 
         plaintext = bytes([random.randint(0, 0xff) for _ in range(16)])
         client.send(aesenc.encrypt(plaintext) + b"\n")
         try:
-            if client.recv(1024) == plaintext:
-                sock.settimeout(None)
+            msg = client.recv(16)
+            if msg == plaintext:
+                print("Verification succeeded")
                 while True:
-                    inc = int(sock.recv(1024))
+                    sock.settimeout(None)
+                    inc = eval(client.recv(1024))
                     session.query(Count).first().snrvalue += inc
                     session.commit()
         except Exception as e:
-            print(e)
+            print(e, "(recieved from snr port)")
+
         client.close()
 
 
 def daily_update_loop():
+    Session = sessionmaker(bind=engine)
+    session = Session()
     week = 1 # TODO: find way of getting week of term from date
     term = 1 # TODO: find way of getting term today
 
@@ -113,7 +120,7 @@ def daily_update_loop():
     current = datetime.datetime.now()
     new = current.replace(day=current.day, hour=1, minute=0, second=0, microsecond=0) + datetime.timedelta(days=1)
     secs = (new - current).total_seconds()
-    Timer(secs, daily_update_loop).start()
+    threading.Timer(secs, daily_update_loop).start()
 
 
 class Data(Base):
@@ -159,6 +166,8 @@ class Count(Base):
 
 
 def count(lib):
+    Session = sessionmaker(bind=engine)
+    session = Session()
     if lib == "snr":
         return session.query(Count).first().snrvalue
     else:
@@ -166,6 +175,8 @@ def count(lib):
 
 
 def get_predictions(lib):
+    Session = sessionmaker(bind=engine)
+    session = Session()
     predictions = {}
     predictions["labels"] = times
     predictions["data"] = [[0 for _ in range(len(times))]]
@@ -215,33 +226,33 @@ def money(lib):
     return "WE ARE NOT CRIMINAKLS!!!!!"
 
 """
-#"""
-Base.metadata.drop_all(engine)
-Base.metadata.create_all(engine)
+"""
+Session = sessionmaker(bind=engine)
+begsession = Session()
+
+Base.metadata.drop_all(begengine)
+Base.metadata.create_all(begengine)
 
 for day in days:
     for time in times:
         d = Data(day=day, time=time)
-        session.add(d)
+        begsession.add(d)
 
-session.add(Count())
+begsession.add(Count())
 
-session.commit()
-#"""
-Timer(0, daily_update_loop).start()
+begsession.commit()
+"""
+threading.Timer(0, daily_update_loop).start()
 
 start_server = websockets.serve(client_help, "0.0.0.0", CLIENT_PORT)
-
-
-async def main():
-    task1 = loop.create_task(start_server)
-    task2 = loop.create_task(snr_updater())
-    task3 = loop.create_task(jnr_updater())
-
-    asyncio.gather([task1, task2, task3])
 
 #loop = asyncio.get_event_loop()
 #loop.run_until_complete(main())
 #loop.close()
-asyncio.get_event_loop().run_until_complete(snr_updater())
+#asyncio.ensure_future(snr_updater())
+
+threading.Thread(target=snr_updater).start()
+threading.Thread(target=jnr_updater).start()
+
+asyncio.get_event_loop().run_until_complete(start_server)
 asyncio.get_event_loop().run_forever()
