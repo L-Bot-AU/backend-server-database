@@ -35,12 +35,12 @@ SNRCOUNTER_PORT = 11498
 async def client_help(websocket, path):
     print(f"Connection received from {websocket} at {path}")
     options = {
-        "/snrCount": lambda :str(count("snr")),
-        "/jnrCount": lambda :str(count("jnr")),
-        "/jnrPredictions": get_predictions("jnr"),
-        "/snrPredictions": get_predictions("snr")
+        "/snrCount": lambda:str(count("snr")),
+        "/jnrCount": lambda:str(count("jnr")),
+        "/jnrPredictions": lambda:get_predictions("jnr"),
+        "/snrPredictions": lambda:get_predictions("snr")
     }
-    await websocket.send(options.get(path, lambda :"Could not recognise action")())
+    await websocket.send(options.get(path, lambda:"Could not recognise action")())
 
 
 def jnr_updater():
@@ -54,22 +54,27 @@ def jnr_updater():
         client, address = sock.accept()
         sock.settimeout(6)
 
-        print(f"Connection from {address[0]}:{address[1]}")
+        print(f"Connection from {address[0]} on jnr port")
 
         plaintext = bytes([random.randint(0, 0xff) for _ in range(16)])
-        client.send(aesenc.encrypt(plaintext))
+        print("Sending verification string")
+        client.send(aesenc.encrypt(plaintext) + b"\n")
         try:
             msg = client.recv(16)
             if msg == plaintext:
                 print("Verification succeeded")
                 while True:
                     sock.settimeout(None)
-                    inc = eval(client.recv(1024))
+                    print("Recieving message")
+                    msg = client.recv(1024)
+                    print(msg)
+                    inc = eval(msg + b"+0")
                     session.query(Count).first().jnrvalue += inc
                     session.commit()
+            else:
+                raise Exception("Verification failed")
         except Exception as e:
-            print(e, "(recieved from jnr port)")
-
+            print(repr(e), "(recieved from jnr port)")
         client.close()
 
 
@@ -84,9 +89,10 @@ def snr_updater():
         client, address = sock.accept()
         sock.settimeout(6)
 
-        print(f"Connection from {address[0]}:{address[1]}")
+        print(f"Connection from {address[0]} on snr port")
 
         plaintext = bytes([random.randint(0, 0xff) for _ in range(16)])
+        print("Sending verification string")
         client.send(aesenc.encrypt(plaintext) + b"\n")
         try:
             msg = client.recv(16)
@@ -94,12 +100,17 @@ def snr_updater():
                 print("Verification succeeded")
                 while True:
                     sock.settimeout(None)
-                    inc = eval(client.recv(1024))
+                    print("Recieving message")
+                    msg = client.recv(1024)
+                    print(msg)
+                    inc = eval(msg)
+                    print(inc)
                     session.query(Count).first().snrvalue += inc
                     session.commit()
+            else:
+                raise Exception("Verification failed")
         except Exception as e:
-            print(e, "(recieved from snr port)")
-
+            print(repr(e), "(recieved from snr port)")
         client.close()
 
 
@@ -135,13 +146,15 @@ class Data(Base):
 
     @validates("jnr_expected")
     def validate_jnrexpected(self, key, count):
-        assert count >= 0
+        if count < 0:
+            return 0
         return count
 
 
     @validates("snr_expected")
     def validate_snrexpected(self, key, count):
-        assert count >= 0
+        if count < 0:
+            return 0
         return count
 
 
@@ -155,13 +168,15 @@ class Count(Base):
 
     @validates("snrvalue")
     def valid_snrvalue(self, key, count):
-        assert count >= 0
+        if count < 0:
+            return 0
         return count
 
 
     @validates("jnrvalue")
     def valid_jnrvalue(self, key, count):
-        assert count >= 0
+        if count < 0:
+            return 0
         return count
 
 
@@ -226,12 +241,12 @@ def money(lib):
     return "WE ARE NOT CRIMINAKLS!!!!!"
 
 """
-"""
+
 Session = sessionmaker(bind=engine)
 begsession = Session()
 
-Base.metadata.drop_all(begengine)
-Base.metadata.create_all(begengine)
+Base.metadata.drop_all(engine)
+Base.metadata.create_all(engine)
 
 for day in days:
     for time in times:
@@ -241,7 +256,7 @@ for day in days:
 begsession.add(Count())
 
 begsession.commit()
-"""
+
 threading.Timer(0, daily_update_loop).start()
 
 start_server = websockets.serve(client_help, "0.0.0.0", CLIENT_PORT)
@@ -256,4 +271,3 @@ threading.Thread(target=jnr_updater).start()
 
 asyncio.get_event_loop().run_until_complete(start_server)
 asyncio.get_event_loop().run_forever()
-# this si aocmmment please don't touch this otherwise oyu an dyour firends and family wil eb  in danger oh god

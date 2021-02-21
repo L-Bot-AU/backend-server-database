@@ -2,7 +2,7 @@ import socket
 import random
 from Crypto.Cipher import AES
 
-SERVER_IP = "192.168.137.62"
+SERVER_IP = "127.0.0.1" # "192.168.137.62"
 JNRCONNECT_PORT = 9482
 SNRCONNECT_PORT = 11498
 
@@ -12,29 +12,27 @@ class ConnServer:
         self.SERVER_SOCK = (SERVER_IP, PORT)
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.connect(self.SERVER_SOCK)
-        print("Connected")
         
-        print("Authing")
+        print("Authorising...")
         self.aesdec = AES.new(b"automate_egggggg", AES.MODE_ECB)
         message = self.sock.recv(16)
         self.sock.send(self.aesdec.decrypt(message))
-        print("Authed")
+        print("Authorised!")
 
     def send(self, msg):
+        if msg >= 0:
+            msg = "+" + msg
+        msg = str(msg)
         try:
-            self.sock.send(msg.encode("latin-1"))
+            self.sock.send(msg.encode("latin-1") + b"\n")
         except (ConnectionResetError, ConnectionAbortedError):
             print("Lost connection :'(")
             self.__init__(*self.SERVER_SOCK)
             self.send(msg)
-    
-    def add(self, n : int):
-        print(f"Sending +{n}")
-        self.send("+"+str(n))
 
-    def sub(self, n : int):
-        print(f"Sending -{n}")
-        self.send("-"+str(n))
+    def update(self, num):
+        self.send(0)
+        self.send(num)
 
 
 class StubConnServer:
@@ -56,7 +54,5 @@ if __name__ == "__main__":
     
     while True: # included here to avoid the race condition of the program quitting before anything is actually sent
         n = int(input())
-        if n > 0:
-            jnr_server.add(n)
-        else:
-            jnr_server.sub(abs(n))
+        jnr_server.send(0)
+        jnr_server.send(n)
