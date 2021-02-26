@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, create_engine
+from sqlalchemy import Column, Integer, String, create_engine, DateTime
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import validates, sessionmaker
 from Crypto.Cipher import AES
@@ -17,9 +17,10 @@ import os
 engine = create_engine("sqlite:///library_usage.db", echo=False)
 Base = declarative_base()
 
-key = b'automate_egggggg'
-aesenc = AES.new(key, AES.MODE_ECB)
-aesdec = AES.new(key, AES.MODE_ECB)
+KEY = b'automate_egggggg'
+# two seperate objects are required for decrypting and encrypting (PyCryptoDome weirdness)
+aesenc = AES.new(KEY, AES.MODE_ECB)
+aesdec = AES.new(KEY, AES.MODE_ECB)
 
 days = ["monday", "tuesday", "wednesday", "thursday", "friday"]
 times = ["Morning", "Break 1", "Break 2"]
@@ -27,17 +28,41 @@ times = ["Morning", "Break 1", "Break 2"]
 cycledays = days
 # cycledays = [day+week for day in days for week in weeks]
 
-CLIENT_PORT = 2910
-JNRCOUNTER_PORT = 9482
-SNRCOUNTER_PORT = 11498
+CLIENT_PORT = 2910 # for blair's website
+JNRCOUNTER_PORT = 9482 # for junior library count updates
+SNRCOUNTER_PORT = 11498 # for senior library count updates
+
+
+def restartdb():
+    Session = sessionmaker(bind=engine)
+    begsession = Session()
+
+    Base.metadata.drop_all(engine)
+    Base.metadata.create_all(engine)
+
+    for day in days:
+        for time in times:
+            d = Data(day=day, time=time)
+            begsession.add(d)
+
+    begsession.add(Count())
+
+    begsession.commit()
+    print("Reset database")
 
 
 async def client_help(websocket, path):
+    """
+    The asynchronous coroutine attached to a websocket which sends the requested data to Blair's website
+
+    websocket: the websocket object which Blair's website will connect to
+    path: the path from the socket indicating what information the website wishes to receive (1 of 4 possibilities)
+    """
     print(f"Connection received from {websocket} at {path}")
     options = {
-        "/snrCount": lambda:str(count("snr")),
-        "/jnrCount": lambda:str(count("jnr")),
-        "/jnrPredictions": lambda:get_predictions("jnr"),
+        "/snrCount": lambda:str(count("snr")), # return number of people in the senior library
+        "/jnrCount": lambda:str(count("jnr")), # return number of people in the junior library
+        "/jnrPredictions": lambda:get_predictions("jnr"), # return 
         "/snrPredictions": lambda:get_predictions("snr")
     }
     await websocket.send(options.get(path, lambda:"Could not recognise action")())
@@ -69,6 +94,7 @@ def jnr_updater():
                     msg = client.recv(1024)
                     print(msg)
                     inc = eval(msg + b"+0")
+                    print(inc)
                     session.query(Count).first().jnrvalue += inc
                     session.commit()
             else:
@@ -112,6 +138,11 @@ def snr_updater():
         except Exception as e:
             print(repr(e), "(recieved from snr port)")
         client.close()
+
+
+def plot_data():
+    print(0)
+    threading.Timer(5, plot_data).start()
 
 
 def daily_update_loop():
@@ -180,6 +211,14 @@ class Count(Base):
         return count
 
 
+class Date(Base):
+    __tablename__ = "date"
+
+    id = Column(Integer, primary_key=True)
+    date = Column(DateTime, default=datetime.datetime.now)
+    count = Column(Integer, primary_key=True)
+
+
 def count(lib):
     Session = sessionmaker(bind=engine)
     session = Session()
@@ -208,7 +247,6 @@ def get_predictions(lib):
                 predictions["data"][0][i] = pred
         predictions["data"].append(day_predictions)
     return json.dumps(predictions)
-
 
 """
 @app.route("/<lib>Events")
@@ -239,25 +277,12 @@ def compUse(lib):
 @app.route("/<lib>Money")
 def money(lib):
     return "WE ARE NOT CRIMINAKLS!!!!!"
-
 """
 
-Session = sessionmaker(bind=engine)
-begsession = Session()
-
-Base.metadata.drop_all(engine)
-Base.metadata.create_all(engine)
-
-for day in days:
-    for time in times:
-        d = Data(day=day, time=time)
-        begsession.add(d)
-
-begsession.add(Count())
-
-begsession.commit()
+#restartdb()
 
 threading.Timer(0, daily_update_loop).start()
+threading.Timer(5, plot_data).start()
 
 start_server = websockets.serve(client_help, "0.0.0.0", CLIENT_PORT)
 
