@@ -233,18 +233,16 @@ def get_predictions(lib):
     session = Session()
     predictions = {}
     predictions["labels"] = times
-    predictions["data"] = [[0 for _ in range(len(times))]]
+    predictions["data"] = [[0 for _ in range(len(times))]] 
     for day in days:
         day_predictions = []
-        for i, time in enumerate(times):
+        for time in times:
             data = session.query(Data).filter_by(day=day, time=time).first()
             if lib == "snr":
                 pred = data.snr_expected
             else:
                 pred = data.jnr_expected
             day_predictions.append(pred)
-            if pred > predictions["data"][0][i]:
-                predictions["data"][0][i] = pred
         predictions["data"].append(day_predictions)
     return json.dumps(predictions)
 
