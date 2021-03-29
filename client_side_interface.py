@@ -14,6 +14,7 @@ import json
 import os
 
 
+# os.remove("library_usage.db")
 engine = create_engine("sqlite:///library_usage.db", echo=False)
 Base = declarative_base()
 
@@ -28,7 +29,7 @@ times = ["Morning", "Break 1", "Break 2"]
 cycledays = days
 # cycledays = [day+week for day in days for week in weeks]
 
-CLIENT_PORT = 2910 # for blair's website
+CLIENT_PORT = 2910 # for library overview website
 JNRCOUNTER_PORT = 9482 # for junior library count updates
 SNRCOUNTER_PORT = 11498 # for senior library count updates
 
@@ -51,9 +52,10 @@ def restartdb():
     print("Reset database")
 
 
+# TODO: remove this websocket coroutine and replace with socket.io
 async def client_help(websocket, path):
     """
-    The asynchronous coroutine attached to a websocket which sends the requested data to Blair's website
+    The asynchronous coroutine attached to a websocket which sends the requested data to the library overview website
 
     websocket: the websocket object which Blair's website will connect to
     path: the path from the socket indicating what information the website wishes to receive (1 of 4 possibilities)
@@ -62,80 +64,121 @@ async def client_help(websocket, path):
     options = {
         "/snrCount": lambda:str(count("snr")), # return number of people in the senior library
         "/jnrCount": lambda:str(count("jnr")), # return number of people in the junior library
-        "/jnrPredictions": lambda:get_predictions("jnr"), # return 
-        "/snrPredictions": lambda:get_predictions("snr")
+        "/jnrPredictions": lambda:get_predictions("jnr"), # return predicted number of people in junior library
+        "/snrPredictions": lambda:get_predictions("snr")  # return predicted number of people in senior library
     }
     await websocket.send(options.get(path, lambda:"Could not recognise action")())
 
 
 def jnr_updater():
+    print("Starting jnr_updater")
+    # start session with database
     Session = sessionmaker(bind=engine)
     session = Session()
-    print("Starting jnr_updater")
+
+    # create socket and listen
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.bind(("0.0.0.0", JNRCOUNTER_PORT))
     sock.listen(10)
+
     while True:
+        # wait for connection
         client, address = sock.accept()
+
+        # timeout the connection if the client takes to long to send a response
         sock.settimeout(6)
 
         print(f"Connection from {address[0]} on jnr port")
 
+        # TODO: replace this verification system with SSL
+        # create random string of bytes for verification
         plaintext = bytes([random.randint(0, 0xff) for _ in range(16)])
+
+        # send encrypted verification string
         print("Sending verification string")
         client.send(aesenc.encrypt(plaintext) + b"\n")
         try:
+            # receive new string and check if the connecting client can decrypt it
             msg = client.recv(16)
             if msg == plaintext:
                 print("Verification succeeded")
                 while True:
+                    # once verification has succeeded, no time limit is required
                     sock.settimeout(None)
+
+                    # receive the update to the number of people in the junior library (+x or -x)
                     print("Recieving message")
                     msg = client.recv(1024)
                     print(msg)
-                    inc = eval(msg + b"+0")
+                    inc = eval(msg + b"+0") # add a "+0" at the end in case the string has a trailing + or - (due to weird bug where requests get merged)
                     print(inc)
+
+                    # update the count in the junior library
                     session.query(Count).first().jnrvalue += inc
                     session.commit()
             else:
+                # if verification is failed, raise an error and let the try/except statement catch it
                 raise Exception("Verification failed")
         except Exception as e:
+            socket.settimeout(None)
+            # print the error (due to verification taking too long, verification being unsuccessful, client closing the connection or some other unknown error
             print(repr(e), "(recieved from jnr port)")
         client.close()
 
 
 def snr_updater():
+    print("Starting snr_updater")
+    # start session with database
     Session = sessionmaker(bind=engine)
     session = Session()
-    print("Starting snr_updater")
+
+    # create socket and listen
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.bind(("0.0.0.0", SNRCOUNTER_PORT))
     sock.listen(10)
     while True:
+        # wait for connection
         client, address = sock.accept()
+
+        # timeout the connection if the client takes to long to send a response
         sock.settimeout(6)
 
         print(f"Connection from {address[0]} on snr port")
 
+        # TODO: replace this verification system with SSL
+        # create random string of bytes for verification        
         plaintext = bytes([random.randint(0, 0xff) for _ in range(16)])
+
+        # send encrypted verification string
         print("Sending verification string")
         client.send(aesenc.encrypt(plaintext) + b"\n")
         try:
+            # receive new string and check if the connecting client can decrypt it
             msg = client.recv(16)
-            if msg == plaintext:
+            if msg == KEY:
                 print("Verification succeeded")
                 while True:
+                    # once verification has succeeded, no time limit is required
                     sock.settimeout(None)
+
+                    # receive the update to the number of people in the senior library (+x or -x)
                     print("Recieving message")
                     msg = client.recv(1024)
                     print(msg)
-                    inc = eval(msg)
+                    inc = eval(msg + b"0") # add a "+0" at the end in case the string has a trailing + or - (due to weird bug where requests get merged)
                     print(inc)
+
+                    # update the count in the senior library
                     session.query(Count).first().snrvalue += inc
                     session.commit()
+                    with open("bleh.txt", "a") as f:
+                        # if verification is failed, raise an error and let the try/except statement catch it
+                        f.write(f"{session.query(Count).first().snrvalue} {datetime.datetime.now()}\n")
             else:
                 raise Exception("Verification failed")
         except Exception as e:
+            sock.settimeout(None)
+            # print the error (due to verification taking too long, verification being unsuccessful, client closing the connection or some other unknown error
             print(repr(e), "(recieved from snr port)")
         client.close()
 
@@ -145,23 +188,32 @@ def plot_data():
     threading.Timer(5, plot_data).start()
 
 
+# called once every day
 def daily_update_loop():
+    # start session with database
     Session = sessionmaker(bind=engine)
     session = Session()
+    
     week = 1 # TODO: find way of getting week of term from date
     term = 1 # TODO: find way of getting term today
 
-    for day in days:
-        predData = getData(term, week, days.index(day) + 1)
+    # loop through each day of the week and update the predicted value on that day
+    for day in range(1, 6):
+        predData = getData(term, week, day + 1)
         for time in times:
-            data = session.query(Data).filter_by(day=day, time=time).first()
-            data.jnr_expected = (predData[2*times.index(data.time)] + predData[2*times.index(data.time)+1]) // 2
-            data.snr_expected = 10
+            data = session.query(Data).filter_by(day=days[day-1], time=time).first()
+            # for now, update with the average of the minumum and maximum
+            data.jnr_expected = (predData["Jnr"][2*times.index(data.time)] + predData["Jnr"][2*times.index(data.time)+1]) // 2 
+            data.snr_expected = (predData["Snr"][2*times.index(data.time)] + predData["Snr"][2*times.index(data.time)+1]) // 2
 
     session.commit()
+
+    # find next time until update
     current = datetime.datetime.now()
     new = current.replace(day=current.day, hour=1, minute=0, second=0, microsecond=0) + datetime.timedelta(days=1)
     secs = (new - current).total_seconds()
+
+    # wait for that difference in time
     threading.Timer(secs, daily_update_loop).start()
 
 
@@ -233,7 +285,7 @@ def get_predictions(lib):
     session = Session()
     predictions = {}
     predictions["labels"] = times
-    predictions["data"] = [[0 for _ in range(len(times))]] 
+    predictions["data"] = [] 
     for day in days:
         day_predictions = []
         for time in times:
@@ -280,13 +332,15 @@ def money(lib):
 #restartdb()
 
 threading.Timer(0, daily_update_loop).start()
+"""
 threading.Timer(5, plot_data).start()
+"""
 
+# TODO: instead of creating a websocket, use socket.io
 start_server = websockets.serve(client_help, "0.0.0.0", CLIENT_PORT)
 
 #loop = asyncio.get_event_loop()
-#loop.run_until_complete(main())
-#loop.close()
+#loop.run_until_complete(main())loop.close()
 #asyncio.ensure_future(snr_updater())
 
 threading.Thread(target=snr_updater).start()
