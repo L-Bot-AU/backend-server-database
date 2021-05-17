@@ -194,12 +194,12 @@ def daily_update_loop():
 
     # loop through each day of the week and update the predicted value on that day
     for day in range(1, 6):
-        predData = getData(term, week, day + 1)
+        predData = getData(term, week, day)
         for i, time in enumerate(times):
             data = session.query(Data).filter_by(day=days[day-1], time=time).first()
             # for now, update with the average of the minumum and maximum
-            data.jnr_expected = (predData["Jnr"][2*i] + predData["Jnr"][2*i+1]) // 2 
-            data.snr_expected = (predData["Snr"][2*i] + predData["Snr"][2*i+1]) // 2
+            data.jnr_expected = predData["Jnr"][i]
+            data.snr_expected = predData["Snr"][i]
 
     session.commit()
 
