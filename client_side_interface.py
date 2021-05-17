@@ -40,7 +40,7 @@ def restartdb():
 
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
-
+    
     for day in days:
         for time in times:
             d = Data(day=day, time=time)
@@ -183,11 +183,6 @@ def snr_updater():
         client.close()
 
 
-def plot_data():
-    print(0)
-    threading.Timer(5, plot_data).start()
-
-
 # called once every day
 def daily_update_loop():
     # start session with database
@@ -200,11 +195,11 @@ def daily_update_loop():
     # loop through each day of the week and update the predicted value on that day
     for day in range(1, 6):
         predData = getData(term, week, day + 1)
-        for time in times:
+        for i, time in enumerate(times):
             data = session.query(Data).filter_by(day=days[day-1], time=time).first()
             # for now, update with the average of the minumum and maximum
-            data.jnr_expected = (predData["Jnr"][2*times.index(data.time)] + predData["Jnr"][2*times.index(data.time)+1]) // 2 
-            data.snr_expected = (predData["Snr"][2*times.index(data.time)] + predData["Snr"][2*times.index(data.time)+1]) // 2
+            data.jnr_expected = (predData["Jnr"][2*i] + predData["Jnr"][2*i+1]) // 2 
+            data.snr_expected = (predData["Snr"][2*i] + predData["Snr"][2*i+1]) // 2
 
     session.commit()
 
@@ -268,6 +263,7 @@ class Date(Base):
 
     id = Column(Integer, primary_key=True)
     date = Column(DateTime, default=datetime.datetime.now)
+    time = Column(String(10), nullable=False)
     count = Column(Integer, primary_key=True)
 
 
